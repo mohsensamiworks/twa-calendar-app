@@ -1,78 +1,139 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-// Telegram injects window.Telegram.WebApp via the script tag in index.html:
-// <script src="https://telegram.org/js/telegram-web-app.js"></script>
-const tg = window.Telegram?.WebApp;
+const KEY = "calendar-events-v1";
+const WEEKDAYS = ["M", "T", "W", "T", "F", "S", "S"];
 
-export default function App() {
-  const [count, setCount] = useState(0);
-  const user = tg?.initDataUnsafe?.user;
+const toKey = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
-  useEffect(() => {
-    if (!tg) return;
-    tg.ready();   // tell Telegram the app has loaded
-    tg.expand();  // use the full height of the sheet
-  }, []);
-
-  // Show Telegram's native main button once there is something to send
-  useEffect(() => {
-    if (!tg) return;
-    const send = () => tg.sendData(JSON.stringify({ count }));
-    tg.MainButton.setText(`Send count (${count})`);
-    tg.MainButton.onClick(send);
-    count > 0 ? tg.MainButton.show() : tg.MainButton.hide();
-    return () => tg.MainButton.offClick(send);
-  }, [count]);
-
-  const tap = () => {
-    tg?.HapticFeedback?.impactOccurred("light");
-    setCount((c) => c + 1);
-  };
-
-  return (
-    <main style={styles.page}>
-      <h1 style={styles.title}>
-        {user ? `Hi, ${user.first_name}` : "Hello"}
-      </h1>
-      {!tg && (
-        <p style={styles.hint}>
-          Open this app from Telegram to see your profile and native buttons.
-        </p>
-      )}
-
-      <p style={styles.count}>{count}</p>
-      <button style={styles.button} onClick={tap}>
-        Tap
-      </button>
-    </main>
-  );
+function load() {
+  try {
+    return JSON.parse(localStorage.getItem(KEY)) || {};
+  } catch {
+    return {};
+  }
 }
 
-// Colors come from Telegram's theme variables so the app matches
-// the user's light/dark mode automatically.
-const styles = {
-  page: {
-    minHeight: "100vh",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 16,
-    padding: 24,
-    fontFamily: "system-ui, sans-serif",
-    background: "var(--tg-theme-bg-color, #ffffff)",
-    color: "var(--tg-theme-text-color, #000000)",
-  },
-  title: { margin: 0, fontSize: 24 },
-  hint: { margin: 0, color: "var(--tg-theme-hint-color, #888)", textAlign: "center" },
-  count: { margin: 0, fontSize: 72, fontWeight: 700 },
-  button: {
-    padding: "12px 40px",
-    fontSize: 18,
-    border: "none",
-    borderRadius: 12,
-    cursor: "pointer",
-    background: "var(--tg-theme-button-color, #2481cc)",
-    color: "var(--tg-theme-button-text-color, #ffffff)",
-  },
-};
+export default function App() {
+  const today = new Date();
+  const [view, setView] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
+  const [selected, setSelected] = useState(toKey(today));
+  const [events, setEvents] = useState(load);
+  const [text, setText] = useState("");
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(KEY, JSON.stringify(events));
+    } catch {}
+  }, [events]);
+
+  // Days of the visible month, padded so the week starts on Monday
+  const cells = useMemo(() => {
+    const y = view.getFullYear();
+    const m = view.getMonth();
+    const offset = (new Date(y, m, 1).getDay() + 6) % 7;
+    const count = new Date(y, m + 1, 0).getDate();
+    return [
+      ...Array(offset).fill(null),
+      ...Array.from({ length: count }, (_, i) => new Date(y, m, i + 1)),
+    ];
+  }, [view]);
+
+  const shiftMonth = (n) => setView(new Date(view.getFullYear(), view.getMonth() + n, 1));
+
+  const goToday = () => {
+    setView(new Date(today.getFullYear(), today.getMonth(), 1));
+    setSelected(toKey(today));
+  };
+
+  const addEvent = () => {
+    const t = text.trim();
+    if (!t) return;
+    setEvents((prev) => ({
+      ...prev,
+      [selected]: [...(prev[selected] || []), { id: Date.now(), text: t }],
+    }));
+    setText("");
+  };
+
+  const removeEvent = (id) =>
+    setEvents((prev) => {
+      const next = { ...prev, [selected]: (prev[selected] || []).filter((e) => e.id !== id) };
+      if (!next[selected].length) delete next[selected];
+      return next;
+    });
+
+  const dayEvents = events[selected] || [];
+  const selectedDate = new Date(selected + "T00:00:00");
+
+  return (
+    <div className="app">
+      <header className="bar">
+        <button aria-label="Previous month" onClick={() => shiftMonth(-1)}>‹</button>
+        <h1>{view.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</h1>
+        <button aria-label="Next month" onClick={() => shiftMonth(1)}>›</button>
+      </header>
+
+      <div className="grid weekdays">
+        {WEEKDAYS.map((d, i) => (
+          <span key={i}>{d}</span>
+        ))}
+      </div>
+
+      <div className="grid days">
+        {cells.map((d, i) =>
+          d ? (
+            <button
+              key={i}
+              className={
+                "day" +
+                (toKey(d) === toKey(today) ? " today" : "") +
+                (toKey(d) === selected ? " selected" : "")
+              }
+              onClick={() => setSelected(toKey(d))}
+            >
+              {d.getDate()}
+              {events[toKey(d)] && <i className="dot" />}
+            </button>
+          ) : (
+            <span key={i} />
+          )
+        )}
+      </div>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>
+            {selectedDate.toLocaleDateString(undefined, {
+              weekday: "long",
+              day: "numeric",
+              month: "long",
+            })}
+          </h2>
+          <button className="link" onClick={goToday}>Today</button>
+        </div>
+
+        {dayEvents.length === 0 && <p className="empty">Nothing planned. Add a note below.</p>}
+
+        <ul>
+          {dayEvents.map((e) => (
+            <li key={e.id}>
+              <span>{e.text}</span>
+              <button aria-label={`Delete ${e.text}`} onClick={() => removeEvent(e.id)}>×</button>
+            </li>
+          ))}
+        </ul>
+
+        <div className="add">
+          <input
+            value={text}
+            placeholder="Add event"
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && addEvent()}
+          />
+          <button onClick={addEvent}>Add</button>
+        </div>
+      </section>
+    </div>
+  );
+}
